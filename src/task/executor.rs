@@ -2,6 +2,7 @@ use super::{Task, TaskId};
 use alloc::{collections::BTreeMap, sync::Arc, task::Wake};
 use core::task::{Context, Poll, Waker};
 use crossbeam_queue::ArrayQueue;
+use crate::{print, println};
 
 pub struct Executor {
     tasks: BTreeMap<TaskId, Task>,
@@ -42,6 +43,7 @@ impl Executor {
         } = self;
 
         while let Ok(task_id) = task_queue.pop() {
+            // println!("Running task: {:}", task_id.0);
             let task = match tasks.get_mut(&task_id) {
                 Some(task) => task,
                 None => continue, // task no longer exists

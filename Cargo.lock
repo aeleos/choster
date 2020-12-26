@@ -37,7 +37,6 @@ dependencies = [
  "bootloader",
  "conquer-once",
  "crossbeam-queue",
- "futures-intrusive",
  "futures-util",
  "lazy_static",
  "linked_list_allocator",
@@ -98,16 +97,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "847ce131b72ffb13b6109a221da9ad97a64cbe48feb1028356b836b47b8f1748"
 
 [[package]]
-name = "futures-intrusive"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62007592ac46aa7c2b6416f7deb9a8a8f63a01e0f1d6e1787d5630170db2b63e"
-dependencies = [
- "futures-core",
- "lock_api 0.4.2",
-]
-
-[[package]]
 name = "futures-task"
 version = "0.3.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -148,15 +137,6 @@ name = "lock_api"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c4da24a77a3d8a6d4862d95f72e6fdb9c09a643ecdb402d754004a557f2bec75"
-dependencies = [
- "scopeguard",
-]
-
-[[package]]
-name = "lock_api"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd96ffd135b2fd7b973ac026d28085defbe8983df057ced3eb4f2130b0831312"
 dependencies = [
  "scopeguard",
 ]
@@ -244,7 +224,7 @@ version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "047031d6df5f5ae0092c97aa4f6bb04cfc9c081b4cd4cb9cdb38657994279a00"
 dependencies = [
- "lock_api 0.3.4",
+ "lock_api",
 ]
 
 [[package]]

@@ -8,43 +8,53 @@ use futures_util::{
     stream::{Stream, StreamExt},
     task::AtomicWaker,
 };
-use lazy_static::lazy_static;
+use conquer_once::spin::OnceCell;
 use pc_keyboard::{layouts, DecodedKey, HandleControl, Keyboard, ScancodeSet1};
 
-/// Queue for holding incoming scancodes from the serial port
-// will hold scancodes between the keyboard interrupt, and next
-// poll call until it can be handled and registered with the waker
 
-lazy_static! {
-    static ref SCANCODE_QUEUE: ArrayQueue<u8> = ArrayQueue::new(100);
-    static ref WAKERS: ArrayQueue<AtomicWaker> = ArrayQueue::new(100);
-}
 
-// static NEW_SCANCODE_EVENT: LocalManualResetEvent = LocalManualResetEvent::new(false);
+// OnceCell that holds a queue of scancodes
+// we use a OnceCell here to ensure that these only get initialized 
+// inside of the ScancodeStream initializer, and not inside the add_scancode function
+// which is run a interrupt
+static SCANCODE_QUEUE: OnceCell<ArrayQueue<u8>> = OnceCell::uninit();
+
+// OnceCell that holds a queue of atomic wakers
+static WAKER_QUEUE: OnceCell<ArrayQueue<AtomicWaker>> = OnceCell::uninit();
+
 
 /// Called by the keyboard interrupt handler
 ///
-/// Must not block or allocate, as waiting or allocating in a interupt 
-/// can lead to memory leaks and laggy execution
+/// Must not block or allocate on the heap, as waiting or allocating in a interupt 
+/// can lead to deadlocks
 pub(crate) fn add_scancode(scancode: u8) {
+    // try to get the scancode queue
+    let scancode_queue = SCANCODE_QUEUE
+        .try_get()
+        .expect("scancode queue not initialized");
+    // try too get the waker queue
+    let waker_queue = WAKER_QUEUE
+        .try_get()
+        .expect("waker queue not initialized");
 
-    // for every waker, push the scancode
-    while let Ok(waker) = WAKERS.pop() {
-        SCANCODE_QUEUE.push(scancode);
+
+    // Here the waker queue should be filled with an atomic waker for each 
+    // async context that creates a scancode stream
+    // For each of these, we want to signal the context that there is a scancode to be read
+    // aditionally, we put a copy of the given scancode into the queue for each context,
+    // as they will be called in any order, and each needs a copy of the scancode
+    // the easiest way to give each of them a scancode is to just copy it into the queue.
+    while let Ok(waker) = waker_queue.pop() {
+        // try to push the scancode into the queue
+        if let Err(_) = scancode_queue.push(scancode) {
+            println!("WARNING: scancode queue full; dropping keyboard input");
+        } else {
+            // if we pushed the scancode for a given context, wake it up
+            waker.wake();
+        }
         
-        waker.wake();
     }
 
-    // if let Err(_) = SCANCODE_QUEUE.push(scancode) {
-    //     println!("WARNING: scancode queue full; dropping keyboard input");
-    // } else {
-    //     // if it succeeded, wake the waker to alert any functions of a new scancode
-    //     println!("add_scancode(): got scancode, waking {:} wakers", WAKERS.len());
-
-    //     while let Ok(waker) = WAKERS.pop() {
-    //         waker.wake();
-    //     }
-    // }
 }
 
 /// ScancodeStream structure
@@ -58,8 +68,12 @@ pub struct ScancodeStream {
 // here we only impement the initialization function
 impl ScancodeStream {
     
+    // Create a new scancode stream
     pub fn new() -> Self {
-        //
+        // try to initialize both queues, we do not care if it already exists, and if it does there should be low overhead
+        SCANCODE_QUEUE.init_once(|| ArrayQueue::new(100));
+        WAKER_QUEUE.init_once(|| ArrayQueue::new(100));
+
         ScancodeStream { _private: () }
     }
 }
@@ -67,24 +81,41 @@ impl ScancodeStream {
 impl Stream for ScancodeStream {
     type Item = u8;
 
-    // Poll the scancode stream 
+    // Attempt to pull the next value out of the stream 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<u8>> {
-        // println!("stream::poll_next() got called");
+        // try to get the scancode queue
+        let scancode_queue = SCANCODE_QUEUE
+            .try_get()
+            .expect("scancode queue not initialized");
+        // try to get the waker qeueu
+        let waker_queue = WAKER_QUEUE
+            .try_get()
+            .expect("waker queue not initialized");
 
-        // 
-        if let Ok(scancode) = SCANCODE_QUEUE.pop() {
+
+        // fast path
+        // if we are here, it means we probably got called after we got woken up by the interrupt with a new scancode
+        // in that case, we grab it from the queue, and tell the poller that we are ready with some data
+        if let Ok(scancode) = scancode_queue.pop() {
             return Poll::Ready(Some(scancode));
         }
 
+
+        // slow path
+        // if not, it means we probably got called by the executor, with no data avaiable
+        // so, we create a new AtomicWaker, and register it with the overall context, and put it in the queue
+        // this lets us tell store the waker, which will let us wake up the context in the future when we have data
         let waker = AtomicWaker::new();
         waker.register(&cx.waker());
-        WAKERS.push(waker);
+        if let Err(_) = waker_queue.push(waker) {
+            println!("WARNING: scancode queue full; dropping keyboard input");
+        }
+        
 
-        // println!("stream::poll_next(): registered waker for this stream, total wakers: {:}", WAKERS.len());
 
-        match SCANCODE_QUEUE.pop() {
+        match scancode_queue.pop() {
             Ok(scancode) => {
-                if let Ok(last_waker) = WAKERS.pop() {
+                if let Ok(last_waker) = waker_queue.pop() {
                     last_waker.take();
 
                 } else {
